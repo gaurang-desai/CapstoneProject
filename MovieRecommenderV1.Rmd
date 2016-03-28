@@ -1,0 +1,312 @@
+---
+title: "Movie Recommender"
+author: "Gaurang Desai"
+date: "March 6, 2016"
+output: html_document
+---
+
+**Overview**
+
+As part of the Capstone project, my aim is to create movie recommendation system based on various algorithms that I have learned as part of my course. This recommendation system is no where close to what other advanced movie recommendation system achieves but do give basic idea on how to go about it.
+
+**Data Source**
+
+This project depends on data source provided by GroupLens Research at  <http://grouplens.org/datasets/movielens/>
+
+I am using Stable benchmark dataset. This dataset contains 100,000 ratings from 1000 users on 1700 movies. Released 4/1998.
+
+Detail about the data structure can be viewed at <http://files.grouplens.org/datasets/movielens/ml-100k-README.txt>
+
+**Objective**
+
+Create recommendation system for moviews based on similarity between movies and users. 
+
+The targeted client would be someone who wants to suggest movie(s) to user based on user's past rating history as well as movie similarity.
+
+Two algorithms that I have used
+1. Collaborative filtering - find the similarity between movies or item based on gener
+2. Nearest neighbour - find the similarity between user based on demographi
+
+**Initial Setup **
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+library(tidyr)
+library(dplyr)
+library(randomForest)
+library(data.table)
+library(class)
+library(e1071) 
+library(rpart)
+library(fpc)
+library(tree)
+
+setwd("~/workspace/SamsungGalaxyDataWrangling/Movie Recommender/ml-100k")
+
+```
+
+**Data Loading**
+
+Load data - we will load set 1 with training and test data as u1.base and u1.test respectively. 
+
+```{r, echo=FALSE}
+ratings <- read.csv("u3.base", header=FALSE,
+                    sep = "\t", stringsAsFactors = FALSE)
+ratings_test <- read.csv("u3.test", header = FALSE, sep="\t", stringsAsFactors = FALSE)
+user <- read.csv("u.user", header=FALSE, sep="|", stringsAsFactors = FALSE)
+movie <- read.csv("u.item", header=FALSE,sep="|", stringsAsFactors = FALSE)
+genre <- read.csv("u.genre",header=FALSE,sep="|", stringsAsFactors = FALSE)
+
+ratings <- as.data.frame(ratings)
+ratings_test <- as.data.frame(ratings_test)
+user <- as.data.frame(user)
+movie <- as.data.frame(movie)
+genre <- as.data.frame(genre)
+```
+
+** Data Wrangling **
+by default, import function does not have column names so using setnames function to rename the column. This is just for debugging and demo perspective, we could have done this as part of read.csv command itself. 
+
+```{r}
+
+setnames(user, 
+         old=c("V1","V2","V3","V4","V5"),
+         new=c("userid","age","gender","profession","zipcode"))
+
+setnames(ratings_test,
+         old = c("V1","V2","V3","V4"),
+         new = c("userid","itemid","rating","timestamp"))
+
+setnames(ratings,
+         old = c("V1","V2","V3","V4"),
+         new = c("userid","itemid","rating","timestamp"))
+
+
+setnames(movie,
+         old = c("V1","V2","V3","V4","V5","V6","V7","V8","V9","V10","V11","V12", "V13", "V14", "V15", "V16", "V17", "V18", "V19", "V20", "V21", "V22", "V23", "V24"),
+         new = c("itemid", "title", "releasedate", "video_release_date", "IMDb_URL", "unknown" , "Action", "Adventure" , "Animation" , "Childrens" , "Comedy" , "Crime" , "Documentary" , "Drama" , "Fantasy" , "FilmNoir" , "Horror" , "Musical" , "Mystery" , "Romance" , "SciFi", "Thriller" , "War" , "Western"))
+
+```
+
+Before we actually start working on recommendation algorithm, we need to transform the data as well as generate few attributes as pre-requisites. 
+
+Step 1 : merge user, rating and movie data
+Setp 2 : define the factors - gender, profession
+Step 3 : define the age group - under 18 years, 18 to 24, 25 to 29, 30 to 34, 35 to 40 and over 40 years.
+Step 4 : define mean movie rating, mean user rating
+Setp 5 : generate training and test dataset without rating variable
+Step 6 : create extractFeature method to convert factors to integer value as well as tidy up the training and test data.
+
+```{r}
+
+
+user_rating <- merge(user, ratings)
+user_rating_test <- merge(user,ratings_test)
+
+user_movie_rating <- merge(user_rating, movie)
+user_movie_rating_test <- merge(user_rating_test, movie)
+
+rm(user_rating)
+rm(user_rating_test)
+
+# factor
+user_movie_rating$gender <- factor(user_movie_rating$gender)
+user_movie_rating$profession <- factor(user_movie_rating$profession)
+user_movie_rating$rating <- factor(user_movie_rating$rating)
+user_movie_rating_test$gender <- factor(user_movie_rating_test$gender)
+user_movie_rating_test$profession <- factor(user_movie_rating_test$profession)
+user_movie_rating_test$rating <- factor(user_movie_rating_test$rating)
+
+
+#naiveBayes algorithm
+
+
+user_movie_rating$age_group <- user_movie_rating$age
+user_movie_rating$age_group[user_movie_rating$age < 18] <- "under 18"
+user_movie_rating$age_group[user_movie_rating$age >= 18 & user_movie_rating$age <25 ] <- "18-24"
+user_movie_rating$age_group[user_movie_rating$age >= 25 & user_movie_rating$age <30 ] <- "25-29"
+user_movie_rating$age_group[user_movie_rating$age >= 30 & user_movie_rating$age <35 ] <- "30-34"
+user_movie_rating$age_group[user_movie_rating$age >= 35 & user_movie_rating$age <40 ] <- "35-40"
+user_movie_rating$age_group[user_movie_rating$age >= 40 ] <- "above 40"
+
+user_movie_rating$age_group <- factor(user_movie_rating$age_group, levels = c("under 18",
+                                                                             "18-24",
+                                                                             "25-29",
+                                                                             "30-34",
+                                                                             "35-40",
+                                                                             "above 40"))
+
+user_movie_rating_test$age_group[user_movie_rating_test$age < 18] <- "under 18"
+user_movie_rating_test$age_group[user_movie_rating_test$age >= 18 & user_movie_rating_test$age <25 ] <- "18-24"
+user_movie_rating_test$age_group[user_movie_rating_test$age >= 25 & user_movie_rating_test$age <30 ] <- "25-29"
+user_movie_rating_test$age_group[user_movie_rating_test$age >= 30 & user_movie_rating_test$age <35 ] <- "30-34"
+user_movie_rating_test$age_group[user_movie_rating_test$age >= 35 & user_movie_rating_test$age <40 ] <- "35-40"
+user_movie_rating_test$age_group[user_movie_rating_test$age >= 40 ] <- "above 40"
+
+user_movie_rating_test$age_group <- factor(user_movie_rating_test$age_group, levels = c("under 18",
+                                                                             "18-24",
+                                                                             "25-29",
+                                                                             "30-34",
+                                                                             "35-40",
+                                                                             "above 40"))
+
+
+movie.rating <- merge(movie, ratings)
+
+movie.rating <- select(movie.rating, itemid, unknown:Western, rating, userid)
+
+movie.rating.stat <- summary(movie.rating$rating)
+
+user.avg.rating <- movie.rating %>%
+    group_by(userid) %>%
+    summarise(avg_rating = mean(rating))
+
+movie.avg.rating <- movie.rating %>%
+  group_by(itemid) %>%
+  summarise(avg_rating = mean(rating))
+
+extractFeatures <- function(data, collist) {
+  features <- collist
+  fea <- data[,features]
+  fea$age_group[is.na(fea$age_group)] <- "18-24"
+  fea$gender[is.na(fea$gender)] <- "F"
+  fea$profession[fea$profession==""] = "none"
+  fea$age_group <- as.integer( fea$age_group)
+  fea$gender <- as.integer( fea$gender)
+  fea$profession <- as.integer( fea$profession)
+
+  return(fea)
+}
+
+train <- extractFeatures(user_movie_rating,c("age_group",
+                "gender",
+                "profession","unknown" , "Action", "Adventure" , "Animation" , "Childrens" , "Comedy" , "Crime" , "Documentary" , "Drama" , "Fantasy" , "FilmNoir" , "Horror" , "Musical" , "Mystery" , "Romance" , "SciFi", "Thriller" , "War" , "Western"
+                ))
+test <- extractFeatures(user_movie_rating_test,c("age_group",
+                "gender",
+                "profession","unknown" , "Action", "Adventure" , "Animation" , "Childrens" , "Comedy" , "Crime" , "Documentary" , "Drama" , "Fantasy" , "FilmNoir" , "Horror" , "Musical" , "Mystery" , "Romance" , "SciFi", "Thriller" , "War" , "Western"
+                ))
+
+
+summary(train$age_group)
+summary(train$profession)
+summary(train$gender)
+```
+
+** collaborative filtering ** -
+Find movie similarity based on gener
+
+movies :
+
+Step 1 : get movie master with all gener and title
+
+Step 2 : transpose movie master such that movie titles are column heading and all gener is observation
+
+Step 3 : use cor to get ther corelation coefficient 
+
+Step 4 : get top 10 neighbours 
+
+**k-Nearest Neighbour Classification**
+
+User :
+
+Step 1 : get the Knn model to find the nearest user 
+
+Step 2 : predict rating based on nearest neighbour
+
+Step 3 : for each use, save top 10 movies that he will rate higest
+
+
+once we have these two matrix, we can show user based on what he has already selected and then the predicted. 
+Once user selects the new movie, we can show him other movies that he is likely to watch. 
+
+```{r}
+
+movie.master <- select( movie , title, unknown:Western)
+movie.master.t <- setNames(data.frame(t(movie.master[,-1])), movie.master[,1])
+
+movie.similarity <- cor(movie.master.t, use="complete.obs", method="kendall")
+
+movie.similarity <- as.matrix(movie.similarity)
+
+data.movie.neighbours <- matrix(NA, nrow=ncol(movie.similarity),ncol=11,dimnames=list(colnames(movie.similarity)))
+ 
+for(i in 1:ncol(movie.master.t)) 
+{
+    d <- movie.similarity[order(movie.similarity[,i], decreasing = TRUE ),]
+    c <- head(n=11,d)
+    data.movie.neighbours[i,] <- rownames(c)
+
+}
+
+head(data.movie.neighbours, n=10)
+
+extractUserFeatures <- function(data, collist) {
+  features <- collist
+  fea <- data[,features]
+  fea$age[is.na(fea$age)] <- "25"
+  fea$gender[is.na(fea$gender)] <- "F"
+  fea$profession[fea$profession==""] = "none"
+  fea$age <- as.integer(fea$age)
+  fea$gender <- as.integer( fea$gender)
+  fea$profession <- as.integer( fea$profession)
+  fea$rating <- as.integer(fea$rating)
+  fea$zipcode <- as.integer(fea$zipcode)
+  fea$zipcode[is.na(fea$zipcode)] <- 0
+  return(fea)
+}
+
+user.master <- extractUserFeatures(user_movie_rating, c("zipcode", "age","gender","profession","rating"))
+user.master.test <- extractUserFeatures(user_movie_rating_test , c("zipcode", "age","gender","profession","rating"))
+
+user_movie_rating_test$pred <- knn(user.master[,-5],user.master.test[,-5], user.master[,5], k = 3)
+
+table(user.master.test[,5], user_movie_rating_test$pred )
+
+data.user.neighbours <- matrix(NA, nrow=nrow(user),ncol=11,dimnames=list(user$userid))
+
+for(i in 1:nrow(user)){
+  d <- user_movie_rating_test[(user_movie_rating_test$userid == i  ) ,]
+ if(nrow(d) >= 11){
+  data.user.neighbours[i,] <- head(n=11,d$title) 
+ }else
+ {
+   if(nrow(d) > 0){
+     for(j in 1 : nrow(d)){
+     data.user.neighbours[i,j] <- d[j,"title"]
+    }
+   }
+ }
+}
+
+head(data.user.neighbours, n=10)
+````
+
+**Save result**
+
+Save the result as csv files
+
+```{r}
+write.table(data.movie.neighbours, file="similar-movie.csv", row.names = TRUE)
+write.table(data.user.neighbours, file="user-movie.csv", row.names = TRUE)
+
+````
+
+
+**Improvements**
+
+
+*Time factor*
+
+Use timestamp to give different weigh to users rating. As user's liking will change with time, it make senes to give higher importance to recent rating against old ratings.
+
+*Time factor - movie*
+
+USe timestamp to give defferent weigh to movie's order. Movie that has got recent ratings should get better treatment then the movie that has got old ratings. recent rating tend to show that the movie is in high demand. 
+
+*Normalize movie rating*
+
+By using average movie rating across the users and average movie rating provided by user across the movies, we can find tune the rating prediction for the user. 
+
+For example, one movie which gets higher average rating then other should get better rating in case of tie. This formula can help us predict individual rating better. 
